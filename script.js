@@ -53,6 +53,7 @@ const ui = {
   joinModal: document.querySelector("#joinModal"),
   playerNameInput: document.querySelector("#playerNameInput"),
   startGameBtn: document.querySelector("#startGameBtn"),
+  backToRoleBtn: document.querySelector("#backToRoleBtn"),
   joinError: document.querySelector("#joinError"),
   roleModal: document.querySelector("#roleModal"),
   chooseHostBtn: document.querySelector("#chooseHostBtn"),
@@ -72,6 +73,7 @@ const state = {
   selectedOption: null,
   currentQuestionKey: null,
   pendingUnflipTimer: null,
+  deckMigrationRunning: false,
 };
 
 const app = initializeApp(firebaseConfig);
@@ -110,6 +112,7 @@ function bindEvents() {
   ui.closeQuestionBtn.addEventListener("click", () => hostSkipQuestion());
   ui.startGameBtn.addEventListener("click", handleJoinSubmit);
   ui.editNamesBtn.addEventListener("click", openJoinModal);
+  ui.backToRoleBtn.addEventListener("click", handleBackToRole);
   ui.boardOverlayAction.addEventListener("click", () => {
     openRoleModal();
   });
@@ -123,6 +126,13 @@ function bindEvents() {
   window.addEventListener("beforeunload", () => {
     leaveRoom();
   });
+}
+
+async function handleBackToRole() {
+  await leaveRoom();
+  closeJoinModal();
+  clearRole();
+  openRoleModal();
 }
 
 async function loadData() {
@@ -315,9 +325,41 @@ function renderRoom(room) {
   renderQuestion(room);
   updatePlayerChip(room);
   updateBoardOverlay(room);
+  migrateDeckImagesIfNeeded(room);
   if (state.role === "player" && state.playerIndex !== null) {
     closeJoinModal();
   }
+}
+
+function migrateDeckImagesIfNeeded(room) {
+  if (state.role !== "host") return;
+  if (state.deckMigrationRunning) return;
+  if (!room?.deck?.length) return;
+
+  const hasHeic = room.deck.some((card) =>
+    String(card.image || "").toLowerCase().endsWith(".heic")
+  );
+
+  if (!hasHeic) return;
+
+  state.deckMigrationRunning = true;
+  runTransaction(db, async (tx) => {
+    const snap = await tx.get(roomRef);
+    if (!snap.exists()) return;
+    const latest = snap.data();
+    const updatedDeck = latest.deck.map((card) => {
+      const source = state.cards.find((item) => item.id === card.id);
+      if (!source) return card;
+      return { ...card, image: source.image };
+    });
+
+    tx.update(roomRef, {
+      deck: updatedDeck,
+      updatedAt: serverTimestamp(),
+    });
+  }).finally(() => {
+    state.deckMigrationRunning = false;
+  });
 }
 
 function updateBoardOverlay(room) {
