@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Architecture Memory Quiz</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-sun"></div>
+  <div class="bg-grid"></div>
+
+  <main class="app">
+    <header class="hero">
+      <div class="title-block">
+        <p class="eyebrow">Memory Quiz</p>
+        <h1>Flip & Answer</h1>
+        <p class="subtitle">Match the pairs, unlock questions, and score points.</p>
+      </div>
+      <div class="controls">
+        <div class="control-group host-only">
+          <span class="control-label">Host controls</span>
+          <div class="control-row">
+            <button class="btn" id="resetBtn" type="button">New round</button>
+            <button class="btn ghost" id="shuffleBtn" type="button">Shuffle</button>
+          </div>
+        </div>
+        <div class="control-group player-only">
+          <span class="control-label">Identity</span>
+          <div class="control-row">
+            <button class="btn ghost player-only" id="editNamesBtn" type="button">Rename</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="fatal hidden" id="fatalError" role="alert">
+      <strong>Setup needed.</strong>
+      <span id="fatalErrorMessage"></span>
+    </div>
+
+    <section class="scoreboard" id="scoreboard">
+      <div class="team-card" data-team="0">
+        <label class="team-label">Player 1</label>
+        <div class="team-name" data-team-name>Player 1</div>
+        <div class="team-score">0</div>
+      </div>
+      <div class="team-card" data-team="1">
+        <label class="team-label">Player 2</label>
+        <div class="team-name" data-team-name>Player 2</div>
+        <div class="team-score">0</div>
+      </div>
+    </section>
+
+    <section class="board-panel">
+      <div class="board-head">
+        <div class="turn-group">
+          <div class="turn" id="turnIndicator">Turn: Player 1</div>
+          <div class="role-meta">
+            <span class="role-chip" id="roleChip">Mode: -</span>
+            <span class="role-chip player-only" id="playerChip">You are: -</span>
+          </div>
+        </div>
+        <div class="matches" id="matchCounter">0/0 pairs</div>
+      </div>
+      <div class="board-wrap">
+        <div class="board-overlay hidden" id="boardOverlay">
+          <div class="board-overlay-card">
+            <h3 id="boardOverlayTitle">Choose a role</h3>
+            <p id="boardOverlayHint">Select Host or Player to begin.</p>
+            <button class="btn ghost" id="boardOverlayAction" type="button">Choose role</button>
+          </div>
+        </div>
+        <div class="board" id="board" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="rules">
+      <h2>Quick rules</h2>
+      <ul>
+        <li>Match a pair to unlock a question.</li>
+        <li>Correct answer: +10 points. Wrong answer: no penalty.</li>
+        <li>If wrong, the other player can answer.</li>
+        <li>Each player can answer correctly at most 2 times in a row.</li>
+      </ul>
+    </section>
+  </main>
+
+  <div class="modal hidden" id="questionModal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close="true"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <span class="team-pill" id="questionTeam">Player 1</span>
+        <span class="question-count" id="questionCount">Question #1</span>
+      </div>
+      <p class="question-note" id="questionNote"></p>
+      <h3 class="question-prompt" id="questionPrompt"></h3>
+      <div class="options" id="questionOptions"></div>
+      <div class="text-answer hidden" id="textAnswerWrap">
+        <input id="textAnswerInput" type="text" placeholder="Type your answer..." />
+      </div>
+      <div class="modal-actions">
+        <button class="btn player-only" id="submitAnswerBtn" type="button">Answer</button>
+        <button class="btn ghost host-only" id="closeQuestionBtn" type="button">Skip</button>
+      </div>
+      <p class="feedback" id="questionFeedback"></p>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="joinModal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close="false"></div>
+    <div class="modal-card join-card">
+      <div class="modal-head">
+        <span class="team-pill">Join</span>
+        <span class="question-count">Player</span>
+      </div>
+      <h3 class="question-prompt">Enter your display name</h3>
+      <div class="join-fields">
+        <label class="join-field">
+          <span>Player name</span>
+          <input id="playerNameInput" type="text" placeholder="Type your name" />
+        </label>
+      </div>
+      <p class="join-error" id="joinError"></p>
+      <div class="modal-actions">
+        <button class="btn" id="startGameBtn" type="button">Join game</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="roleModal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close="false"></div>
+    <div class="modal-card role-card">
+      <div class="modal-head">
+        <span class="team-pill">Choose role</span>
+        <span class="question-count">Realtime</span>
+      </div>
+      <h3 class="question-prompt">How do you want to join?</h3>
+      <p class="question-note">Host observes and resets rounds. Players flip cards and answer.</p>
+      <div class="modal-actions">
+        <button class="btn" id="chooseHostBtn" type="button">Host</button>
+        <button class="btn ghost" id="choosePlayerBtn" type="button">Player</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="script.js"></script>
+</body>
+</html>
