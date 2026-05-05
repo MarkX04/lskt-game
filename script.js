@@ -1,37 +1,17 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
-import {
-  getFirestore,
-  doc,
-  getDoc,
-  setDoc,
-  updateDoc,
-  onSnapshot,
-  runTransaction,
-  serverTimestamp,
-} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
-import {
-  getAuth,
-  signInAnonymously,
-  onAuthStateChanged,
-} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
-import { firebaseConfig } from "./firebase-config.js";
+const DATA = {
+  cards: "data/cards.json",
+  questions: "data/questions.json",
+};
 
-const ROOM_ID = "default";
-const ROLE_KEY = "quiz-role";
 const POINTS_PER_CORRECT = 10;
 const CONSECUTIVE_LIMIT = 2;
-const UNFLIP_DELAY = 850;
-const DEFAULT_NAMES = ["Player 1", "Player 2"];
 
 const ui = {
   board: document.querySelector("#board"),
   turnIndicator: document.querySelector("#turnIndicator"),
   matchCounter: document.querySelector("#matchCounter"),
-  roleChip: document.querySelector("#roleChip"),
-  playerChip: document.querySelector("#playerChip"),
   resetBtn: document.querySelector("#resetBtn"),
   shuffleBtn: document.querySelector("#shuffleBtn"),
-  editNamesBtn: document.querySelector("#editNamesBtn"),
   modal: document.querySelector("#questionModal"),
   modalBackdrop: document.querySelector(".modal-backdrop"),
   questionTeam: document.querySelector("#questionTeam"),
@@ -44,976 +24,427 @@ const ui = {
   submitAnswerBtn: document.querySelector("#submitAnswerBtn"),
   closeQuestionBtn: document.querySelector("#closeQuestionBtn"),
   questionFeedback: document.querySelector("#questionFeedback"),
-  fatalError: document.querySelector("#fatalError"),
-  fatalErrorMessage: document.querySelector("#fatalErrorMessage"),
-  boardOverlay: document.querySelector("#boardOverlay"),
-  boardOverlayTitle: document.querySelector("#boardOverlayTitle"),
-  boardOverlayHint: document.querySelector("#boardOverlayHint"),
-  boardOverlayAction: document.querySelector("#boardOverlayAction"),
-  joinModal: document.querySelector("#joinModal"),
-  playerNameInput: document.querySelector("#playerNameInput"),
-  startGameBtn: document.querySelector("#startGameBtn"),
-  backToRoleBtn: document.querySelector("#backToRoleBtn"),
-  joinError: document.querySelector("#joinError"),
-  roleModal: document.querySelector("#roleModal"),
-  chooseHostBtn: document.querySelector("#chooseHostBtn"),
-  choosePlayerBtn: document.querySelector("#choosePlayerBtn"),
 };
 
 const state = {
-  role: null,
-  playerId: null,
-  authUser: null,
-  playerIndex: null,
   cards: [],
   questions: [],
-  room: null,
-  deckKey: "",
-  cardEls: new Map(),
+  deck: [],
+  flipped: [],
+  matched: new Set(),
+  lock: false,
+  teams: [],
+  currentTeam: 0,
+  usedQuestions: new Set(),
+  questionCounter: 0,
+  activeQuestion: null,
   selectedOption: null,
-  currentQuestionKey: null,
-  pendingUnflipTimer: null,
-  deckMigrationRunning: false,
+  totalPairs: 0,
 };
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
-const roomRef = doc(db, "rooms", ROOM_ID);
-
-init();
-
-async function init() {
-  bindEvents();
-  await loadData();
-  try {
-    await ensureAuth();
-  } catch (error) {
-    showFatalError(
-      "Authentication failed. Enable Anonymous Auth in Firebase and refresh."
-    );
-    return;
+const shuffle = (items) => {
+  for (let i = items.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
   }
-
-  const role = getRoleFromUrlOrStorage();
-  if (role) {
-    setRole(role);
-    await startRealtime();
-  } else {
-    clearRole();
-    openRoleModal();
-  }
-}
-
-function bindEvents() {
-  ui.resetBtn.addEventListener("click", () => hostReset(true));
-  ui.shuffleBtn.addEventListener("click", () => hostReset(false));
-  ui.submitAnswerBtn.addEventListener("click", handleSubmitAnswer);
-  ui.closeQuestionBtn.addEventListener("click", () => hostSkipQuestion());
-  ui.startGameBtn.addEventListener("click", handleJoinSubmit);
-  ui.editNamesBtn.addEventListener("click", openJoinModal);
-  ui.backToRoleBtn.addEventListener("click", handleBackToRole);
-  ui.boardOverlayAction.addEventListener("click", () => {
-    openRoleModal();
-  });
-  ui.chooseHostBtn.addEventListener("click", () => chooseRole("host"));
-  ui.choosePlayerBtn.addEventListener("click", () => chooseRole("player"));
-
-  window.addEventListener("pagehide", () => {
-    leaveRoom();
-  });
-
-  window.addEventListener("beforeunload", () => {
-    leaveRoom();
-  });
-}
-
-async function handleBackToRole() {
-  await leaveRoom();
-  closeJoinModal();
-  clearRole();
-  openRoleModal();
-}
-
-async function loadData() {
-  const [cardsResponse, questionsResponse] = await Promise.all([
-    fetch("data/cards.json"),
-    fetch("data/questions.json"),
-  ]);
-
-  const cardsJson = await cardsResponse.json();
-  const questionsJson = await questionsResponse.json();
-
-  state.cards = Array.isArray(cardsJson) ? cardsJson : cardsJson.pairs || [];
-  state.questions = Array.isArray(questionsJson)
-    ? questionsJson
-    : questionsJson.questions || [];
-}
-
-function getRoleFromUrlOrStorage() {
-  const params = new URLSearchParams(window.location.search);
-  const role = params.get("role");
-  if (role === "host" || role === "player") return role;
-
-  const stored = localStorage.getItem(ROLE_KEY);
-  if (stored === "host" || stored === "player") return stored;
-  return null;
-}
-
-function chooseRole(role) {
-  setRole(role);
-  closeRoleModal();
-  startRealtime();
-}
-
-function setRole(role) {
-  state.role = role;
-  document.body.dataset.role = role;
-  localStorage.setItem(ROLE_KEY, role);
-  ui.roleChip.textContent = `Mode: ${role === "host" ? "Host" : "Player"}`;
-  hideBoardOverlay();
-}
-
-function clearRole() {
-  state.role = null;
-  document.body.dataset.role = "none";
-  localStorage.removeItem(ROLE_KEY);
-  ui.roleChip.textContent = "Mode: -";
-  if (ui.playerChip) {
-    ui.playerChip.textContent = "You are: -";
-  }
-  showBoardOverlay({
-    title: "Choose a role",
-    hint: "Select Host or Player to begin.",
-    actionLabel: "Choose role",
-  });
-}
-
-function ensureAuth() {
-  return new Promise((resolve, reject) => {
-    if (auth.currentUser) {
-      state.authUser = auth.currentUser;
-      state.playerId = auth.currentUser.uid;
-      resolve(auth.currentUser);
-      return;
-    }
-
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        state.authUser = user;
-        state.playerId = user.uid;
-        unsubscribe();
-        resolve(user);
-      }
-    });
-
-    signInAnonymously(auth).catch((error) => {
-      unsubscribe();
-      reject(error);
-    });
-  });
-}
-
-function openRoleModal() {
-  ui.roleModal.classList.remove("hidden");
-}
-
-function closeRoleModal() {
-  ui.roleModal.classList.add("hidden");
-}
-
-
-function showFatalError(message) {
-  ui.fatalErrorMessage.textContent = message;
-  ui.fatalError.classList.remove("hidden");
-}
-
-async function startRealtime() {
-  if (state.role === "host") {
-    await ensureRoom();
-  }
-
-  subscribeRoom();
-
-  if (state.role === "player") {
-    openJoinModal();
-  }
-}
-
-async function ensureRoom() {
-  const snap = await getDoc(roomRef);
-  if (snap.exists()) return;
-  await setDoc(roomRef, buildInitialRoom());
-}
-
-function buildInitialRoom() {
-  return {
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    hostId: state.playerId,
-    players: [null, null],
-    playerIds: [],
-    teams: buildTeamsFromPlayers([null, null], null, true),
-    currentTeam: 0,
-    deck: buildDeck(state.cards),
-    flipped: [],
-    matchedPairs: [],
-    lock: false,
-    pendingUnflip: null,
-    activeQuestion: null,
-    questionCounter: 0,
-    usedQuestions: [],
-  };
-}
-
-function buildTeamsFromPlayers(players, existingTeams, resetScores) {
-  return players.map((player, index) => {
-    const name = resetScores
-      ? (player?.name || DEFAULT_NAMES[index])
-      : (player?.name || existingTeams?.[index]?.name || DEFAULT_NAMES[index]);
-    return {
-      name,
-      score: resetScores ? 0 : existingTeams?.[index]?.score || 0,
-      streak: resetScores ? 0 : existingTeams?.[index]?.streak || 0,
-    };
-  });
-}
-
-function buildPlayerIds(players, existingIds) {
-  const set = new Set(existingIds || []);
-  players.forEach((player) => {
-    if (player?.id) set.add(player.id);
-  });
-  return Array.from(set);
-}
-
-function subscribeRoom() {
-  onSnapshot(roomRef, (snap) => {
-    if (!snap.exists()) {
-      if (state.role === "host") {
-        ensureRoom();
-      } else {
-        ui.joinError.textContent = "Room is not ready yet. Please wait for the host.";
-        openJoinModal();
-      }
-      return;
-    }
-
-    state.room = snap.data();
-    syncPlayerIndex(state.room);
-    renderRoom(state.room);
-    handlePendingUnflip(state.room);
-  }, (error) => {
-    showFatalError(
-      "Firestore permission denied. Check rules, enable Anonymous Auth, and refresh."
-    );
-  });
-}
-
-function syncPlayerIndex(room) {
-  if (state.role !== "player") return;
-  const players = room.players || [];
-  const index = players.findIndex((player) => player?.id === state.playerId);
-  state.playerIndex = index !== -1 ? index : null;
-}
-
-function renderRoom(room) {
-  updateScoreboard(room);
-  updateTurnIndicator(room);
-  updateMatchCounter(room);
-  renderBoard(room);
-  renderQuestion(room);
-  updatePlayerChip(room);
-  updateBoardOverlay(room);
-  migrateDeckImagesIfNeeded(room);
-  if (state.role === "player" && state.playerIndex !== null) {
-    closeJoinModal();
-  }
-}
-
-function migrateDeckImagesIfNeeded(room) {
-  if (state.role !== "host") return;
-  if (state.deckMigrationRunning) return;
-  if (!room?.deck?.length) return;
-
-  const hasHeic = room.deck.some((card) =>
-    String(card.image || "").toLowerCase().endsWith(".heic")
-  );
-
-  if (!hasHeic) return;
-
-  state.deckMigrationRunning = true;
-  runTransaction(db, async (tx) => {
-    const snap = await tx.get(roomRef);
-    if (!snap.exists()) return;
-    const latest = snap.data();
-    const updatedDeck = latest.deck.map((card) => {
-      const source = state.cards.find((item) => item.id === card.id);
-      if (!source) return card;
-      return { ...card, image: source.image };
-    });
-
-    tx.update(roomRef, {
-      deck: updatedDeck,
-      updatedAt: serverTimestamp(),
-    });
-  }).finally(() => {
-    state.deckMigrationRunning = false;
-  });
-}
-
-function updateBoardOverlay(room) {
-  if (!state.role) {
-    showBoardOverlay({
-      title: "Choose a role",
-      hint: "Select Host or Player to begin.",
-      actionLabel: "Choose role",
-    });
-    return;
-  }
-
-  if (state.role === "player" && state.playerIndex === null) {
-    showBoardOverlay({
-      title: "Join the game",
-      hint: "Enter your display name to take a seat.",
-      actionLabel: "Enter name",
-      onAction: openJoinModal,
-    });
-    return;
-  }
-
-  if (state.role === "player" && room && room.currentTeam !== state.playerIndex) {
-    const waitingFor = room.teams?.[room.currentTeam]?.name || "the other player";
-    showBoardOverlay({
-      title: "Waiting",
-      hint: `It's ${waitingFor}'s turn.`,
-      actionLabel: null,
-    });
-    return;
-  }
-
-  hideBoardOverlay();
-}
-
-function showBoardOverlay({ title, hint, actionLabel, onAction }) {
-  ui.boardOverlayTitle.textContent = title;
-  ui.boardOverlayHint.textContent = hint;
-  if (actionLabel) {
-    ui.boardOverlayAction.textContent = actionLabel;
-    ui.boardOverlayAction.classList.remove("hidden");
-    ui.boardOverlayAction.onclick = onAction || openRoleModal;
-  } else {
-    ui.boardOverlayAction.classList.add("hidden");
-  }
-  ui.boardOverlay.classList.remove("hidden");
-}
-
-function hideBoardOverlay() {
-  ui.boardOverlay.classList.add("hidden");
-}
-
-function updateScoreboard(room) {
-  const teamCards = document.querySelectorAll(".team-card");
-  teamCards.forEach((card, index) => {
-    const team = room.teams?.[index];
-    const nameEl = card.querySelector(".team-name");
-    const scoreEl = card.querySelector(".team-score");
-
-    if (team) {
-      nameEl.textContent = team.name;
-      scoreEl.textContent = team.score;
-    }
-
-    card.classList.toggle("active", index === room.currentTeam);
-  });
-}
-
-function updateTurnIndicator(room) {
-  const team = room.teams?.[room.currentTeam];
-  ui.turnIndicator.textContent = team ? `Turn: ${team.name}` : "Turn: -";
-}
-
-function updateMatchCounter(room) {
-  const totalPairs = state.cards.length;
-  const matched = room.matchedPairs?.length || 0;
-  ui.matchCounter.textContent = `${matched}/${totalPairs} pairs`;
-}
-
-function updatePlayerChip(room) {
-  if (state.role !== "player") return;
-  if (state.playerIndex === null) {
-    ui.playerChip.textContent = "You are: -";
-    return;
-  }
-  const name = room.teams?.[state.playerIndex]?.name || DEFAULT_NAMES[state.playerIndex];
-  ui.playerChip.textContent = `You are: ${name}`;
-}
-
-function renderBoard(room) {
-  const deck = room.deck || [];
-  const deckKey = deck.map((card) => card.uid).join("|");
-
-  if (deckKey !== state.deckKey) {
-    ui.board.innerHTML = "";
-    state.cardEls.clear();
-    state.deckKey = deckKey;
-
-    deck.forEach((card, index) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "card";
-      button.dataset.uid = card.uid;
-      button.dataset.pair = card.id;
-      button.style.setProperty("--delay", `${index * 40}ms`);
-      button.setAttribute("aria-label", `The ${card.label}`);
-      button.innerHTML = `
-        <span class="card-inner">
-          <span class="card-face card-back">?</span>
-          <span class="card-face card-front">
-            <img src="${card.image}" alt="${card.label}" loading="lazy" />
-          </span>
-        </span>
-      `;
-      button.addEventListener("click", () => handleCardClick(card.uid));
-      ui.board.appendChild(button);
-      state.cardEls.set(card.uid, button);
-    });
-  }
-
-  deck.forEach((card) => {
-    const button = state.cardEls.get(card.uid);
-    if (!button) return;
-    const flipped = card.flipped || card.matched;
-    button.classList.toggle("is-flipped", flipped);
-    button.classList.toggle("is-matched", card.matched);
-  });
-
-  const locked =
-    state.role === "host" ||
-    room.lock ||
-    !!room.activeQuestion ||
-    !canPlayerInteract(room);
-  ui.board.classList.toggle("is-locked", locked);
-}
-
-function canPlayerInteract(room) {
-  if (state.role !== "player") return false;
-  if (state.playerIndex === null) return false;
-  if (room.currentTeam !== state.playerIndex) return false;
-  return true;
-}
-
-function renderQuestion(room) {
-  const question = room.activeQuestion;
-  if (!question) {
-    closeQuestionModal();
-    return;
-  }
-
-  const questionKey = `${question.id}-${question.attempt}`;
-  if (questionKey !== state.currentQuestionKey) {
-    state.currentQuestionKey = questionKey;
-    state.selectedOption = null;
-    ui.textAnswerInput.value = "";
-  }
-
-  const answeringTeam = room.teams?.[question.answeringTeam];
-  ui.questionTeam.textContent = answeringTeam ? answeringTeam.name : "";
-  ui.questionCount.textContent = `Question #${question.number}`;
-  ui.questionPrompt.textContent = question.prompt;
-  ui.questionOptions.innerHTML = "";
-  ui.textAnswerWrap.classList.add("hidden");
-  ui.questionFeedback.textContent = "";
-
-  const canAnswer =
-    state.role === "player" && state.playerIndex === question.answeringTeam;
-
-  if (question.type === "text") {
-    ui.textAnswerWrap.classList.remove("hidden");
-    ui.textAnswerInput.disabled = !canAnswer;
-  } else {
-    (question.options || []).forEach((option) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "option";
-      button.textContent = option;
-      if (!canAnswer) {
-        button.classList.add("disabled");
-      } else {
-        button.addEventListener("click", () => {
-          state.selectedOption = option;
-          ui.questionOptions.querySelectorAll(".option").forEach((el) => {
-            el.classList.toggle("selected", el === button);
-          });
-        });
-      }
-      ui.questionOptions.appendChild(button);
-    });
-  }
-
-  let note = question.note || "";
-  if (state.role === "player" && !canAnswer) {
-    note = "Waiting for the other player to answer.";
-  }
-  ui.questionNote.textContent = note;
-
-  ui.submitAnswerBtn.disabled = !canAnswer;
-  openQuestionModal();
-}
-
-function openQuestionModal() {
-  ui.modal.classList.remove("hidden");
-}
-
-function closeQuestionModal() {
-  ui.modal.classList.add("hidden");
-  ui.questionFeedback.textContent = "";
-}
-
-async function handleCardClick(uid) {
-  if (state.role !== "player") return;
-  if (!state.room || !canPlayerInteract(state.room)) return;
-  if (state.room.lock || state.room.activeQuestion) return;
-
-  await runTransaction(db, async (tx) => {
-    const snap = await tx.get(roomRef);
-    if (!snap.exists()) return;
-
-    const room = snap.data();
-    if (room.lock || room.activeQuestion) return;
-    if (room.currentTeam !== state.playerIndex) return;
-
-    const deck = [...room.deck];
-    const cardIndex = deck.findIndex((card) => card.uid === uid);
-    if (cardIndex === -1) return;
-    if (deck[cardIndex].matched || deck[cardIndex].flipped) return;
-
-    deck[cardIndex] = { ...deck[cardIndex], flipped: true };
-    const flipped = [...(room.flipped || []), uid];
-
-    if (flipped.length < 2) {
-      tx.update(roomRef, {
-        deck,
-        flipped,
-        updatedAt: serverTimestamp(),
-      });
-      return;
-    }
-
-    const [firstUid, secondUid] = flipped;
-    const firstCard = deck.find((card) => card.uid === firstUid);
-    const secondCard = deck.find((card) => card.uid === secondUid);
-    if (!firstCard || !secondCard) return;
-
-    if (firstCard.id === secondCard.id) {
-      const matchedPairs = Array.from(
-        new Set([...(room.matchedPairs || []), firstCard.id])
-      );
-
-      const questionPick = pickQuestion(room.usedQuestions || []);
-      if (!questionPick) {
-        tx.update(roomRef, {
-          deck: deck.map((card) =>
-            card.id === firstCard.id
-              ? { ...card, matched: true }
-              : card
-          ),
-          flipped: [],
-          matchedPairs,
-          lock: false,
-          updatedAt: serverTimestamp(),
-        });
-        return;
-      }
-
-      const baseTeam = room.currentTeam;
-      let answeringTeam = baseTeam;
-      let note = "";
-
-      if (room.teams?.[baseTeam]?.streak >= CONSECUTIVE_LIMIT) {
-        answeringTeam = getNextTeamIndex(baseTeam);
-        note = "This player already answered correctly twice in a row. The next question goes to the other player.";
-      }
-
-      const activeQuestion = {
-        ...questionPick.question,
-        number: (room.questionCounter || 0) + 1,
-        attempt: 1,
-        initialTeam: baseTeam,
-        answeringTeam,
-        note,
-      };
-
-      const updatedDeck = deck.map((card) =>
-        card.id === firstCard.id ? { ...card, matched: true } : card
-      );
-
-      tx.update(roomRef, {
-        deck: updatedDeck,
-        flipped: [],
-        matchedPairs,
-        activeQuestion,
-        questionCounter: (room.questionCounter || 0) + 1,
-        usedQuestions: questionPick.usedQuestions,
-        lock: true,
-        updatedAt: serverTimestamp(),
-      });
-      return;
-    }
-
-    tx.update(roomRef, {
-      deck,
-      flipped,
-      lock: true,
-      pendingUnflip: {
-        uids: flipped,
-        by: state.playerId,
-        nextTeam: getNextTeamIndex(room.currentTeam),
-      },
-      updatedAt: serverTimestamp(),
-    });
-  });
-}
-
-function handlePendingUnflip(room) {
-  const pending = room.pendingUnflip;
-  if (!pending || pending.by !== state.playerId) return;
-  if (state.pendingUnflipTimer) return;
-
-  state.pendingUnflipTimer = setTimeout(() => {
-    resolveUnflip(pending.uids, pending.by, pending.nextTeam);
-    state.pendingUnflipTimer = null;
-  }, UNFLIP_DELAY);
-}
-
-async function resolveUnflip(uids, by, nextTeam) {
-  await runTransaction(db, async (tx) => {
-    const snap = await tx.get(roomRef);
-    if (!snap.exists()) return;
-    const room = snap.data();
-    if (!room.pendingUnflip || room.pendingUnflip.by !== by) return;
-
-    const deck = room.deck.map((card) =>
-      uids.includes(card.uid) ? { ...card, flipped: false } : card
-    );
-
-    tx.update(roomRef, {
-      deck,
-      flipped: [],
-      lock: false,
-      pendingUnflip: null,
-      currentTeam: nextTeam,
-      updatedAt: serverTimestamp(),
-    });
-  });
-}
-
-async function handleSubmitAnswer() {
-  if (state.role !== "player") return;
-  if (!state.room?.activeQuestion) return;
-  if (state.playerIndex !== state.room.activeQuestion.answeringTeam) return;
-
-  const question = state.room.activeQuestion;
-  const answer = getAnswerInput(question);
-
-  if (!answer) {
-    ui.questionFeedback.textContent = "Please choose an answer.";
-    return;
-  }
-
-  await runTransaction(db, async (tx) => {
-    const snap = await tx.get(roomRef);
-    if (!snap.exists()) return;
-    const room = snap.data();
-    const active = room.activeQuestion;
-    if (!active) return;
-    if (active.answeringTeam !== state.playerIndex) return;
-
-    const isCorrect = checkAnswer(active, answer);
-    const teams = room.teams.map((team) => ({ ...team }));
-
-    if (isCorrect) {
-      const team = teams[active.answeringTeam];
-      team.score += POINTS_PER_CORRECT;
-      team.streak += 1;
-      teams.forEach((other, index) => {
-        if (index !== active.answeringTeam) other.streak = 0;
-      });
-
-      tx.update(roomRef, {
-        teams,
-        activeQuestion: null,
-        lock: false,
-        currentTeam: active.answeringTeam,
-        updatedAt: serverTimestamp(),
-      });
-      return;
-    }
-
-    teams[active.answeringTeam].streak = 0;
-
-    if (active.attempt === 1) {
-      const nextTeam = getNextTeamIndex(active.answeringTeam);
-      tx.update(roomRef, {
-        teams,
-        activeQuestion: {
-          ...active,
-          attempt: 2,
-          answeringTeam: nextTeam,
-          note: "Other player can answer now.",
-        },
-        updatedAt: serverTimestamp(),
-      });
-      return;
-    }
-
-    tx.update(roomRef, {
-      teams,
-      activeQuestion: null,
-      lock: false,
-      currentTeam: getNextTeamIndex(active.answeringTeam),
-      updatedAt: serverTimestamp(),
-    });
-  });
-}
-
-function getAnswerInput(question) {
-  if (question.type === "text") {
-    return ui.textAnswerInput.value.trim();
-  }
-  return state.selectedOption;
-}
-
-function checkAnswer(question, answer) {
-  const normalizedAnswer = normalizeAnswer(String(answer));
-  const expectedAnswers = Array.isArray(question.answer)
-    ? question.answer
-    : [question.answer];
-
-  return expectedAnswers.some(
-    (item) => normalizeAnswer(String(item)) === normalizedAnswer
-  );
-}
-
-function normalizeAnswer(value) {
-  return value
+  return items;
+};
+
+const normalizeAnswer = (value) =>
+  value
     .toLowerCase()
     .trim()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/đ/g, "d")
     .replace(/\s+/g, " ");
-}
 
-async function handleJoinSubmit() {
-  if (state.role !== "player") return;
+const formatCorrectAnswer = (question) => {
+  const answers = Array.isArray(question.answer) ? question.answer : [question.answer];
+  return answers.map((answer) => String(answer).trim()).join(" / ");
+};
 
-  const name = ui.playerNameInput.value.trim();
-  if (!name) {
-    ui.joinError.textContent = "Please enter a display name.";
+const nextTeamIndex = (index) => (index + 1) % state.teams.length;
+
+const setTurnIndicator = () => {
+  const team = state.teams[state.currentTeam];
+  if (!team) return;
+  ui.turnIndicator.textContent = `Turn: ${team.name}`;
+};
+
+const updateScoreboard = () => {
+  state.teams.forEach((team, index) => {
+    team.scoreEl.textContent = team.score;
+    team.card.classList.toggle("active", index === state.currentTeam);
+  });
+};
+
+const updateMatchCounter = () => {
+  ui.matchCounter.textContent = `${state.matched.size}/${state.totalPairs} pairs`;
+};
+
+const flipCard = (card) => {
+  card.classList.add("is-flipped");
+};
+
+const unflipCard = (card) => {
+  card.classList.remove("is-flipped");
+};
+
+const markMatched = (first, second) => {
+  first.classList.add("is-matched");
+  second.classList.add("is-matched");
+  state.matched.add(first.dataset.pair);
+  updateMatchCounter();
+};
+
+const buildDeck = () => {
+  const deck = [];
+  state.cards.forEach((card) => {
+    deck.push({ ...card, uid: `${card.id}-a` });
+    deck.push({ ...card, uid: `${card.id}-b` });
+  });
+  shuffle(deck);
+  return deck;
+};
+
+const calcCols = (count) => {
+  if (count <= 12) return 4;
+  if (count <= 16) return 4;
+  if (count <= 20) return 5;
+  return 6;
+};
+
+const buildBoard = () => {
+  state.deck = buildDeck();
+  state.flipped = [];
+  state.matched = new Set();
+  state.totalPairs = state.cards.length;
+  ui.board.innerHTML = "";
+
+  const cols = calcCols(state.deck.length);
+  ui.board.style.setProperty("--cols", cols);
+
+  state.deck.forEach((card, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "card";
+    button.dataset.pair = card.id;
+    button.dataset.uid = card.uid;
+    button.style.setProperty("--delay", `${index * 40}ms`);
+    button.setAttribute("aria-label", `Card ${card.label}`);
+    button.innerHTML = `
+      <span class="card-inner">
+        <span class="card-face card-back">?</span>
+        <span class="card-face card-front">
+          <img src="${card.image}" alt="${card.label}" loading="lazy" />
+        </span>
+      </span>
+    `;
+    button.addEventListener("click", handleCardClick);
+    ui.board.appendChild(button);
+  });
+
+  updateMatchCounter();
+};
+
+const pickQuestion = () => {
+  if (!state.questions.length) return null;
+  if (state.usedQuestions.size >= state.questions.length) {
+    state.usedQuestions.clear();
+  }
+
+  let question = null;
+  while (!question) {
+    const candidate = state.questions[Math.floor(Math.random() * state.questions.length)];
+    if (!state.usedQuestions.has(candidate.id)) {
+      question = candidate;
+      state.usedQuestions.add(candidate.id);
+    }
+  }
+  return question;
+};
+
+const showModal = () => {
+  ui.modal.classList.remove("hidden");
+};
+
+const hideModal = () => {
+  ui.modal.classList.add("hidden");
+  ui.questionFeedback.textContent = "";
+};
+
+const renderQuestion = (question, teamIndex, note) => {
+  const team = state.teams[teamIndex];
+  ui.questionTeam.textContent = team ? team.name : "";
+  ui.questionCount.textContent = `Question #${state.activeQuestion.number}`;
+  ui.questionNote.textContent = note || "";
+  ui.questionPrompt.textContent = question.prompt;
+  ui.questionFeedback.textContent = "";
+  ui.questionOptions.innerHTML = "";
+  ui.textAnswerWrap.classList.add("hidden");
+  state.selectedOption = null;
+
+  if (question.type === "text") {
+    ui.textAnswerWrap.classList.remove("hidden");
+    ui.textAnswerInput.value = "";
+    ui.textAnswerInput.focus();
     return;
   }
 
-  ui.joinError.textContent = "";
-  try {
-    const index = await joinPlayer(name);
-    state.playerIndex = index;
-    closeJoinModal();
-  } catch (error) {
-    ui.joinError.textContent = error.message || "Unable to join.";
-  }
-}
-
-async function leaveRoom() {
-  if (state.role !== "player") return;
-  if (!state.playerId) return;
-
-  try {
-    await runTransaction(db, async (tx) => {
-      const snap = await tx.get(roomRef);
-      if (!snap.exists()) return;
-      const room = snap.data();
-
-      const players = room.players ? [...room.players] : [null, null];
-      const index = players.findIndex((player) => player?.id === state.playerId);
-      if (index === -1) return;
-
-      players[index] = null;
-
-      const teams = room.teams?.map((team) => ({ ...team })) || [];
-      if (teams[index]) {
-        teams[index].name = DEFAULT_NAMES[index];
-      }
-
-      const playerIds = (room.playerIds || []).filter((id) => id !== state.playerId);
-
-      tx.update(roomRef, {
-        players,
-        playerIds,
-        teams,
-        updatedAt: serverTimestamp(),
+  question.options.forEach((option) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "option";
+    button.textContent = option;
+    button.addEventListener("click", () => {
+      state.selectedOption = option;
+      ui.questionOptions.querySelectorAll(".option").forEach((el) => {
+        el.classList.toggle("selected", el === button);
       });
     });
+    ui.questionOptions.appendChild(button);
+  });
+};
+
+const openQuestion = () => {
+  const question = pickQuestion();
+  if (!question) {
+    state.lock = false;
+    return;
+  }
+
+  state.questionCounter += 1;
+  const initialTeam = state.currentTeam;
+  let answeringTeam = initialTeam;
+  let note = "";
+
+  if (state.teams[answeringTeam].streak >= CONSECUTIVE_LIMIT) {
+    answeringTeam = nextTeamIndex(initialTeam);
+    note = "This team already answered correctly twice in a row. The next question goes to the other team.";
+  }
+
+  state.activeQuestion = {
+    question,
+    number: state.questionCounter,
+    attempt: 1,
+    initialTeam,
+    answeringTeam,
+  };
+
+  renderQuestion(question, answeringTeam, note);
+  showModal();
+};
+
+const closeQuestion = () => {
+  state.activeQuestion = null;
+  hideModal();
+};
+
+const skipQuestion = () => {
+  const baseTeam = state.activeQuestion?.answeringTeam ?? state.currentTeam;
+  closeQuestion();
+  state.flipped = [];
+  state.lock = false;
+  state.currentTeam = nextTeamIndex(baseTeam);
+  updateScoreboard();
+  setTurnIndicator();
+};
+
+const awardPoints = (teamIndex) => {
+  const team = state.teams[teamIndex];
+  team.score += POINTS_PER_CORRECT;
+  team.streak += 1;
+  state.teams.forEach((other, index) => {
+    if (index !== teamIndex) other.streak = 0;
+  });
+  state.currentTeam = teamIndex;
+  updateScoreboard();
+  setTurnIndicator();
+};
+
+const handleWrongAnswer = (teamIndex) => {
+  state.teams[teamIndex].streak = 0;
+  updateScoreboard();
+};
+
+const resolveQuestionCorrect = (teamIndex) => {
+  awardPoints(teamIndex);
+  closeQuestion();
+  state.flipped = [];
+  state.lock = false;
+};
+
+const resolveQuestionWrong = (teamIndex) => {
+  handleWrongAnswer(teamIndex);
+
+  if (state.activeQuestion.attempt === 1) {
+    const nextTeam = nextTeamIndex(teamIndex);
+    if (nextTeam !== teamIndex) {
+      state.activeQuestion.attempt = 2;
+      state.activeQuestion.answeringTeam = nextTeam;
+      renderQuestion(state.activeQuestion.question, nextTeam, "Other team can answer now.");
+      return;
+    }
+  }
+
+  closeQuestion();
+  state.flipped = [];
+  state.lock = false;
+  state.currentTeam = nextTeamIndex(teamIndex);
+  updateScoreboard();
+  setTurnIndicator();
+};
+
+const getSubmittedAnswer = (question) => {
+  if (question.type === "text") {
+    return ui.textAnswerInput.value;
+  }
+  return state.selectedOption;
+};
+
+const handleSubmitAnswer = () => {
+  if (!state.activeQuestion) return;
+  const question = state.activeQuestion.question;
+  const answer = getSubmittedAnswer(question);
+
+  if (!answer || !answer.trim()) {
+    ui.questionFeedback.textContent = "Please choose an answer.";
+    return;
+  }
+
+  const normalizedAnswer = normalizeAnswer(answer);
+  const expectedAnswers = Array.isArray(question.answer)
+    ? question.answer
+    : [question.answer];
+  const isCorrect = expectedAnswers.some(
+    (item) => normalizeAnswer(String(item)) === normalizedAnswer
+  );
+
+  if (isCorrect) {
+    ui.questionFeedback.textContent = "Correct!";
+    setTimeout(() => {
+      resolveQuestionCorrect(state.activeQuestion.answeringTeam);
+    }, 400);
+  } else {
+    const isFinalAttempt = state.activeQuestion.attempt >= 2;
+    if (isFinalAttempt) {
+      const correctAnswer = formatCorrectAnswer(question);
+      ui.questionFeedback.textContent = `Incorrect. Correct answer: ${correctAnswer}`;
+      setTimeout(() => {
+        resolveQuestionWrong(state.activeQuestion.answeringTeam);
+      }, 1200);
+    } else {
+      ui.questionFeedback.textContent = "Incorrect.";
+      setTimeout(() => {
+        resolveQuestionWrong(state.activeQuestion.answeringTeam);
+      }, 400);
+    }
+  }
+};
+
+const handleCardClick = (event) => {
+  const card = event.currentTarget;
+  if (state.lock) return;
+  if (card.classList.contains("is-flipped") || card.classList.contains("is-matched")) return;
+
+  flipCard(card);
+  state.flipped.push(card);
+
+  if (state.flipped.length < 2) return;
+
+  state.lock = true;
+  const [first, second] = state.flipped;
+  const isMatch = first.dataset.pair === second.dataset.pair;
+
+  if (isMatch) {
+    markMatched(first, second);
+    setTimeout(() => {
+      openQuestion();
+    }, 450);
+  } else {
+    setTimeout(() => {
+      unflipCard(first);
+      unflipCard(second);
+      state.flipped = [];
+      state.lock = false;
+      state.currentTeam = nextTeamIndex(state.currentTeam);
+      updateScoreboard();
+      setTurnIndicator();
+    }, 850);
+  }
+};
+
+const setupTeams = () => {
+  const cards = document.querySelectorAll(".team-card");
+  state.teams = Array.from(cards).map((card, index) => {
+    const nameInput = card.querySelector(".team-name");
+    const scoreEl = card.querySelector(".team-score");
+    const team = {
+      index,
+      name: nameInput.value.trim() || `Player ${index + 1}`,
+      score: 0,
+      streak: 0,
+      card,
+      nameInput,
+      scoreEl,
+    };
+
+    nameInput.addEventListener("input", () => {
+      team.name = nameInput.value.trim() || `Player ${index + 1}`;
+      setTurnIndicator();
+    });
+
+    return team;
+  });
+};
+
+const resetScores = () => {
+  state.teams.forEach((team, index) => {
+    team.score = 0;
+    team.streak = 0;
+    team.name = team.nameInput.value.trim() || `Player ${index + 1}`;
+  });
+  state.currentTeam = 0;
+  updateScoreboard();
+  setTurnIndicator();
+};
+
+const resetRound = () => {
+  state.usedQuestions.clear();
+  state.questionCounter = 0;
+  resetScores();
+  buildBoard();
+};
+
+const shuffleRound = () => {
+  buildBoard();
+};
+
+const init = async () => {
+  setupTeams();
+  setTurnIndicator();
+
+  try {
+    const [cardsResponse, questionsResponse] = await Promise.all([
+      fetch(DATA.cards),
+      fetch(DATA.questions),
+    ]);
+
+    state.cards = await cardsResponse.json();
+    state.questions = await questionsResponse.json();
+    buildBoard();
+    updateScoreboard();
+    setTurnIndicator();
   } catch (error) {
-    // Best effort on unload.
+    ui.board.innerHTML = "<p>Unable to load data. Please check data/ files.</p>";
   }
-}
+};
 
-async function joinPlayer(name) {
-  return runTransaction(db, async (tx) => {
-    const snap = await tx.get(roomRef);
-    if (!snap.exists()) {
-      throw new Error("Room is not ready yet. Please wait for the host.");
-    }
+ui.resetBtn.addEventListener("click", resetRound);
+ui.shuffleBtn.addEventListener("click", shuffleRound);
+ui.submitAnswerBtn.addEventListener("click", handleSubmitAnswer);
+ui.closeQuestionBtn.addEventListener("click", skipQuestion);
+ui.modalBackdrop.addEventListener("click", skipQuestion);
 
-    const room = snap.data();
-    const players = room.players ? [...room.players] : [null, null];
-
-    let index = players.findIndex((player) => player?.id === state.playerId);
-    if (index === -1) {
-      index = players.findIndex((player) => !player);
-    }
-
-    if (index === -1) {
-      throw new Error("Room is full (2 players already).");
-    }
-
-    players[index] = {
-      id: state.playerId,
-      name,
-      joinedAt: Date.now(),
-    };
-
-    const teams = buildTeamsFromPlayers(players, room.teams, false);
-    const playerIds = buildPlayerIds(players, room.playerIds);
-
-    tx.update(roomRef, {
-      players,
-      playerIds,
-      teams,
-      updatedAt: serverTimestamp(),
-    });
-
-    return index;
-  });
-}
-
-function openJoinModal() {
-  ui.joinError.textContent = "";
-  ui.playerNameInput.value = "";
-  ui.joinModal.classList.remove("hidden");
-  ui.playerNameInput.focus();
-  ui.board.classList.add("is-locked");
-}
-
-function closeJoinModal() {
-  ui.joinModal.classList.add("hidden");
-  ui.board.classList.remove("is-locked");
-}
-
-async function hostReset(resetScores) {
-  if (state.role !== "host") return;
-
-  await runTransaction(db, async (tx) => {
-    const snap = await tx.get(roomRef);
-    const room = snap.exists() ? snap.data() : null;
-
-    const shouldClearPlayers = resetScores === true;
-    const players = shouldClearPlayers ? [null, null] : (room?.players || [null, null]);
-    const teams = buildTeamsFromPlayers(players, room?.teams, resetScores);
-    const playerIds = shouldClearPlayers ? [] : buildPlayerIds(players, room?.playerIds);
-    const deck = buildDeck(state.cards);
-    const hostId = room?.hostId || state.playerId;
-
-    const update = {
-      hostId,
-      players,
-      playerIds,
-      teams,
-      deck,
-      flipped: [],
-      matchedPairs: [],
-      pendingUnflip: null,
-      activeQuestion: null,
-      lock: false,
-      updatedAt: serverTimestamp(),
-    };
-
-    if (resetScores) {
-      update.currentTeam = 0;
-      update.questionCounter = 0;
-      update.usedQuestions = [];
-    } else {
-      update.currentTeam = room?.currentTeam ?? 0;
-      update.questionCounter = room?.questionCounter ?? 0;
-      update.usedQuestions = room?.usedQuestions ?? [];
-    }
-
-    if (snap.exists()) {
-      tx.update(roomRef, update);
-    } else {
-      tx.set(roomRef, {
-        ...buildInitialRoom(),
-        ...update,
-      });
-    }
-  });
-}
-
-async function hostSkipQuestion() {
-  if (state.role !== "host") return;
-
-  await runTransaction(db, async (tx) => {
-    const snap = await tx.get(roomRef);
-    if (!snap.exists()) return;
-    const room = snap.data();
-    if (!room.activeQuestion) return;
-
-    const nextTeam = getNextTeamIndex(room.activeQuestion.answeringTeam);
-
-    tx.update(roomRef, {
-      activeQuestion: null,
-      lock: false,
-      currentTeam: nextTeam,
-      updatedAt: serverTimestamp(),
-    });
-  });
-}
-
-function buildDeck(cards) {
-  const deck = [];
-  cards.forEach((card) => {
-    deck.push({ ...card, uid: `${card.id}-a`, flipped: false, matched: false });
-    deck.push({ ...card, uid: `${card.id}-b`, flipped: false, matched: false });
-  });
-  return shuffle(deck);
-}
-
-function pickQuestion(usedQuestions) {
-  if (!state.questions.length) return null;
-  const used = new Set(usedQuestions);
-  let available = state.questions.filter((question) => !used.has(question.id));
-
-  if (!available.length) {
-    used.clear();
-    available = [...state.questions];
-  }
-
-  if (!available.length) return null;
-  const question = available[Math.floor(Math.random() * available.length)];
-  used.add(question.id);
-  return { question, usedQuestions: Array.from(used) };
-}
-
-function getNextTeamIndex(index) {
-  return (index + 1) % 2;
-}
-
-function shuffle(items) {
-  const array = [...items];
-  for (let i = array.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
-}
+document.addEventListener("DOMContentLoaded", init);

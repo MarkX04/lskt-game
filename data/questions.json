@@ -2,57 +2,70 @@
   {
     "id": "q1",
     "type": "mcq",
-    "prompt": "Which building is famous for the massive dome in Rome?",
-    "options": ["Pantheon", "Colosseum", "Parthenon", "Hagia Sophia"],
-    "answer": "Pantheon"
+    "prompt": "Uncle Hoa's House is currently used as:",
+    "options": ["Government office", "Hotel", "Museum of Fine Arts", "School"],
+    "answer": "Museum of Fine Arts"
   },
   {
     "id": "q2",
     "type": "mcq",
-    "prompt": "The Doric order belongs to which architectural tradition?",
-    "options": ["Ancient Greek", "Ancient Roman", "Gothic", "Baroque"],
-    "answer": "Ancient Greek"
+    "prompt": "The complex originally consisted of at least how many main buildings?",
+    "options": ["2", "3", "4", "5"],
+    "answer": "4"
   },
   {
     "id": "q3",
     "type": "mcq",
-    "prompt": "Which material is most associated with Brutalism?",
-    "options": ["Raw concrete", "Wood", "Polished steel", "Marble"],
-    "answer": "Raw concrete"
+    "prompt": "What is the MOST critical factor that enabled the large-scale construction in the 1920s?",
+    "options": ["Urban planning policies", "Family wealth accumulation", "French government support", "Availability of materials"],
+    "answer": "Family wealth accumulation"
   },
   {
     "id": "q4",
     "type": "mcq",
-    "prompt": "Which style is known for pointed arches and stained glass?",
-    "options": ["Romanesque", "Gothic", "Renaissance", "Modern"],
-    "answer": "Gothic"
+    "prompt": "Why does the architecture show multiple styles (classical + Art Deco)?",
+    "options": ["Poor planning", "Random design", "Gradual construction across different historical periods", "Influence from multiple architects at the same time"],
+    "answer": "Gradual construction across different historical periods"
   },
   {
     "id": "q5",
-    "type": "mcq",
-    "prompt": "A traditional Northern Vietnamese house often has which layout?",
-    "options": ["Three-bay, two-lean-to house", "Tube house", "Stilt house", "Linear garden house"],
-    "answer": "Three-bay, two-lean-to house"
+    "type": "text",
+    "prompt": "The compound reached its full capacity during the __________ phase.",
+    "answer": "Stabilization"
   },
   {
     "id": "q6",
     "type": "mcq",
-    "prompt": "Who is associated with the Garden City concept?",
-    "options": ["Ebenezer Howard", "Le Corbusier", "Frank Lloyd Wright", "I.M. Pei"],
-    "answer": "Ebenezer Howard"
+    "prompt": "The most important construction phase occurred around:",
+    "options": ["1910", "1924", "1935", "1950"],
+    "answer": "1924"
   },
   {
     "id": "q7",
     "type": "mcq",
-    "prompt": "Which building is seen as an icon of the International Style?",
-    "options": ["Villa Savoye", "Sagrada Familia", "Sydney Opera House", "Fallingwater"],
-    "answer": "Villa Savoye"
+    "prompt": "What is the main architectural style of the main building?",
+    "options": ["Pure Chinese", "Pure Vietnamese", "French Beaux-Arts + Eastern elements", "Modern minimalist"],
+    "answer": "French Beaux-Arts + Eastern elements"
   },
   {
     "id": "q8",
     "type": "mcq",
-    "prompt": "Which city is a Renaissance-era example of planned urban form?",
-    "options": ["Palmanova", "Barcelona", "Paris", "London"],
-    "answer": "Palmanova"
+    "prompt": "How is the facade of the building characterized?",
+    "options": ["Asymmetry", "Random composition", "Symmetry", "Minimalism"],
+    "answer": "Symmetry"
+  },
+  {
+    "id": "q9",
+    "type": "mcq",
+    "prompt": "Why is the atrium considered an important climatic adaptation?",
+    "options": ["It reduces noise", "It enhances ventilation and lighting in tropical conditions", "It improves security", "It increases structural stability"],
+    "answer": "It enhances ventilation and lighting in tropical conditions"
+  },
+  {
+    "id": "q10",
+    "type": "mcq",
+    "prompt": "Which phase contributed MOST to defining the identity of the complex?",
+    "options": ["Early phase", "Core construction phase", "Expansion phase", "Stabilization phase"],
+    "answer": "Core construction phase"
   }
 ]
